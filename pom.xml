@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.starburst.sas</groupId>
+  <artifactId>sas-jdbc-wrapper</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>sas-jdbc-wrapper</name>
+  <description>
+    JDBC driver wrapper for SAS (IOM / SAS 9.4 Integration Technologies JDBC
+    driver) used with Starburst's Generic JDBC connector. Starts as a
+    transparent call tracer (every JDBC call logged, delegate untouched) to
+    diagnose schema/catalog discovery issues, with an extension point to
+    grow into a behavioral wrapper (e.g. remapping getSchemas()/getCatalogs())
+    once a specific fix is validated against a real SAS IOM environment.
+  </description>
+
+  <properties>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <finalName>${project.artifactId}-${project.version}</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.1</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
