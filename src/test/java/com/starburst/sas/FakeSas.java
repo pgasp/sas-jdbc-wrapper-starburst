@@ -155,6 +155,10 @@ final class FakeSas {
                             return columnsResult();
                         case "getTables":
                             return tablesResult();
+                        case "getCatalogs":
+                            return failingResultSet("Stream closed");
+                        case "getTypeInfo":
+                            return failingResultSet("NO COLUMN named X");
                         case "toString":
                             return "FakeMetaData";
                         case "hashCode":
@@ -167,19 +171,63 @@ final class FakeSas {
                 });
     }
 
-    /** A connection whose statements return a result set that lacks TABLE_CAT (to check tolerance is not applied there). */
+    /** Result set whose every getter fails with the given message (not a missing-column error unless it says so). */
+    static ResultSet failingResultSet(String message) {
+        return (ResultSet) Proxy.newProxyInstance(FakeSas.class.getClassLoader(), new Class<?>[]{ResultSet.class},
+                (proxy, m, a) -> {
+                    if (m.getName().startsWith("get")) {
+                        throw new SQLException(message);
+                    }
+                    return defaultFor(m.getReturnType(), proxy, m, a);
+                });
+    }
+
+    private static Object defaultFor(Class<?> type, Object proxy, Method m, Object[] a) {
+        switch (m.getName()) {
+            case "hashCode":
+                return System.identityHashCode(proxy);
+            case "equals":
+                return proxy == a[0];
+            case "toString":
+                return "Fake";
+            default:
+                break;
+        }
+        if (type == boolean.class) {
+            return false;
+        }
+        if (type == int.class) {
+            return 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        return null;
+    }
+
     static Connection connection(DatabaseMetaData md) {
+        return connection(md, new ArrayList<>());
+    }
+
+    /** A connection recording the SQL text received by prepareStatement/prepareCall/nativeSQL and Statement methods. */
+    static Connection connection(DatabaseMetaData md, List<String> sqlSeen) {
         return (Connection) Proxy.newProxyInstance(FakeSas.class.getClassLoader(), new Class<?>[]{Connection.class},
                 (proxy, m, a) -> {
                     switch (m.getName()) {
                         case "getMetaData":
                             return md;
                         case "createStatement":
-                            return statement();
+                            return statement(Statement.class, sqlSeen);
                         case "prepareStatement":
-                            return preparedStatement();
+                            sqlSeen.add((String) a[0]);
+                            return statement(PreparedStatement.class, sqlSeen);
+                        case "prepareCall":
+                            sqlSeen.add((String) a[0]);
+                            return statement(java.sql.CallableStatement.class, sqlSeen);
+                        case "nativeSQL":
+                            sqlSeen.add((String) a[0]);
+                            return a[0];
                         case "getCatalog":
-                            return null;
                         case "close":
                             return null;
                         case "toString":
@@ -194,35 +242,16 @@ final class FakeSas {
                 });
     }
 
-    private static Statement statement() {
-        return (Statement) Proxy.newProxyInstance(FakeSas.class.getClassLoader(), new Class<?>[]{Statement.class},
+    private static Object statement(Class<?> type, List<String> sqlSeen) {
+        return Proxy.newProxyInstance(FakeSas.class.getClassLoader(), new Class<?>[]{type},
                 (proxy, m, a) -> {
+                    if (a != null && a.length > 0 && a[0] instanceof String && !m.getName().startsWith("set")) {
+                        sqlSeen.add((String) a[0]);
+                    }
                     if (m.getName().equals("executeQuery")) {
                         return resultSet(Arrays.asList("COL_X"), rows(new Object[]{"cell-value-1"}));
                     }
-                    if (m.getName().equals("hashCode")) {
-                        return System.identityHashCode(proxy);
-                    }
-                    if (m.getName().equals("equals")) {
-                        return proxy == a[0];
-                    }
-                    return null;
-                });
-    }
-
-    private static PreparedStatement preparedStatement() {
-        return (PreparedStatement) Proxy.newProxyInstance(FakeSas.class.getClassLoader(), new Class<?>[]{PreparedStatement.class},
-                (proxy, m, a) -> {
-                    switch (m.getName()) {
-                        case "hashCode":
-                            return System.identityHashCode(proxy);
-                        case "equals":
-                            return proxy == a[0];
-                        case "executeQuery":
-                            return resultSet(Arrays.asList("COL_X"), rows(new Object[]{"cell"}));
-                        default:
-                            return null;
-                    }
+                    return defaultFor(m.getReturnType(), proxy, m, a);
                 });
     }
 

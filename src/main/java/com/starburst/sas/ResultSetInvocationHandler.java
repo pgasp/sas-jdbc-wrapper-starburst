@@ -12,7 +12,7 @@ import java.util.Set;
  * ResultSet tracer. When {@code tolerant} is set (only for result sets that
  * come from a DatabaseMetaData method, in NOARG mode) a read of one of a
  * closed whitelist of optional metadata columns that the delegate rejects
- * with an SQLException is answered with NULL (0 for primitive int/short
+ * with an SQLException saying that the column does not exist is answered with NULL (0 for primitive int/short
  * getters) and {@code wasNull()} reports true until the next read.
  *
  * Any other column keeps throwing: unknown or unexpected columns are a real
@@ -47,13 +47,19 @@ class ResultSetInvocationHandler extends TracingInvocationHandler {
         try {
             return invokeTarget(method, args);
         } catch (SQLException e) {
-            if (tolerant && isToleratedRead(method, args)) {
+            if (tolerant && isMissingColumn(e) && isToleratedRead(method, args)) {
                 forcedNull = true;
                 note.append("missing optional column tolerated");
                 return defaultValue(method.getReturnType());
             }
             throw e;
         }
+    }
+
+    /** The SAS driver reports a missing column as "No column of that name."; any other SQLException is a real error. */
+    static boolean isMissingColumn(SQLException e) {
+        String message = e.getMessage();
+        return message != null && message.toLowerCase(Locale.ROOT).contains("no column");
     }
 
     private static boolean isToleratedRead(Method method, Object[] args) {

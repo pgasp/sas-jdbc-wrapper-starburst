@@ -23,7 +23,7 @@ overload a client calls, and it does not provide some optional metadata columns:
 | `getSchemas(catalog, schemaPattern)` returns **0 rows** (also with `null, null`) | Starburst calls exactly this (`getSchemas(connection.getCatalog(), null)`), so it sees no schema |
 | `getCatalogs()` returns 0 rows | SAS libraries are **not** exposed as catalogs |
 | Reading a missing column throws `SQLException("No column of that name.")`: `TABLE_CATALOG` in `getSchemas()` results, `SOURCE_DATA_TYPE`, `IS_AUTOINCREMENT`, `IS_GENERATEDCOLUMN` in `getColumns()` results | generic clients that read these optional JDBC columns fail |
-| `Connection.getSchema()` is unsupported, `getIdentifierQuoteString()` returns a space, `getSearchStringEscape()` returns an empty string | see "Known limitations" |
+| `Connection.getSchema()` is unsupported, `getIdentifierQuoteString()` returns a space, `getSearchStringEscape()` returns an empty string | not changed by the wrapper (see "Known limitations" and `identifierQuoting`) |
 
 ### `catalogs` mode removed
 
@@ -55,7 +55,8 @@ All optional, set as JVM properties of the process that loads the driver.
 |---|---|---|
 | `sas.wrapper.delegateClass` | `com.sas.rio.MVADriver` | Real driver class to wrap |
 | `sas.wrapper.schemaSource` | `passthrough` | `passthrough`: no behavior change (trace only). `noarg`: enables the fixes below. Any other value (including the removed `catalogs`) is rejected |
-| `sas.wrapper.trace` | `true` | `false` = **no logging at all** (the log file is not even created) |
+| `sas.wrapper.identifierQuoting` | `passthrough` | `passthrough`: SQL unchanged. `strip`: double-quoted identifiers in SQL are rewritten for SAS SQL (see below). Any other value is rejected |
+| `sas.wrapper.trace` | `false` | `true` enables call logging (diagnosis). `false` = **no logging at all** (the log file is not even created) |
 | `sas.wrapper.trace.values` | `false` | `false`: `ResultSet` getter results and bound parameters / updated values are logged as `<value>`; `true` logs them (diagnosis only) |
 | `sas.wrapper.logFile` | `<tmpdir>/sas-jdbc-wrapper.log` | Trace output path (created owner-only when the file system supports POSIX permissions) |
 
@@ -75,8 +76,33 @@ All optional, set as JVM properties of the process that loads the driver.
   (`TABLE_CAT`, `TABLE_CATALOG`, `SOURCE_DATA_TYPE`, `IS_AUTOINCREMENT`,
   `IS_GENERATEDCOLUMN`) with `getString`, `getInt`, `getShort` or `getObject`
   by label returns `NULL` (`0` for the primitive getters) and `wasNull()`
-  reports `true`. Any other missing column keeps throwing (fail closed), as do
-  reads on result sets of statements.
+  reports `true`, **only** when the driver's error says that the column does not
+  exist (message containing "no column", case-insensitive; the SAS driver says
+  "No column of that name."). Any other `SQLException`, any other column
+  (e.g. `REMARKS`) and any read on a result set of a statement keeps throwing
+  (fail closed).
+* `getSearchStringEscape()` and every other metadata value are never altered
+  (the SAS driver returns an empty escape string and that is passed through).
+
+### What `identifierQuoting=strip` does
+
+Starburst's Generic JDBC connector generates SQL with double-quoted
+identifiers (`SELECT "COL" FROM "LIB"."TAB" WHERE "COL" = ?`), whereas SAS SQL
+treats double quotes as string constants unless the `DQUOTE=ANSI` option is
+set. With `strip`, the SQL text passed to `Connection.prepareStatement`,
+`prepareCall`, `nativeSQL` and `Statement.execute` / `executeQuery` /
+`executeUpdate` / `addBatch` is rewritten by a small linear tokenizer:
+
+* `"X"` becomes `X` when X matches `[A-Za-z_][A-Za-z0-9_]{0,31}`;
+* any other name becomes the SAS name literal `'X'n` (`'` doubled inside);
+  `""` inside a quoted identifier is one double quote;
+* single-quoted literals (including `''` escapes), `--` and `/* */` comments
+  and `?` placeholders are never touched;
+* malformed input (unterminated quote, literal or comment) is passed to the
+  driver unchanged so that it reports the error itself.
+
+The setting is independent of `schemaSource`. Use it if `SELECT` statements
+fail on the quoted identifiers; the rewritten SQL is what the trace shows.
 
 ## Usage as a Starburst Generic JDBC catalog
 
@@ -87,21 +113,27 @@ All optional, set as JVM properties of the process that loads the driver.
    connection-url=jdbc:sasiom://<sas-host>:<port>
    generic-jdbc.driver-class=com.starburst.sas.SasJdbcWrapperDriver
    case-insensitive-name-matching=true
+   generic-jdbc.ignore-search-string-escape=true
    ```
    (user / password / TLS settings unchanged from the working configuration.)
    `case-insensitive-name-matching=true` is recommended: SAS library and table
-   names are case-insensitive.
+   names are case-insensitive. `generic-jdbc.ignore-search-string-escape=true`
+   is a harmless safeguard: the SAS driver has no search-string escape, so
+   metadata lookups must not be escaped.
 3. JVM properties of the coordinator and the workers (`jvm.config`):
    ```
    -Dsas.wrapper.delegateClass=com.sas.rio.MVADriver
    -Dsas.wrapper.schemaSource=noarg
+   -Dsas.wrapper.trace.values=false
    ```
-   For troubleshooting add `-Dsas.wrapper.trace=true -Dsas.wrapper.logFile=...`.
+   Add `-Dsas.wrapper.identifierQuoting=strip` if `SELECT` fails on quoted
+   identifiers. Add `-Dsas.wrapper.trace=true [-Dsas.wrapper.logFile=...]` only
+   while testing.
 
 ### Production: trace off, or values hidden
 
-Tracing is **on** by default (diagnosis tool). In production set
-`-Dsas.wrapper.trace=false`, or at least keep `sas.wrapper.trace.values=false`
+Tracing is **off** by default. Enable it only while testing, and in production
+keep `sas.wrapper.trace=false`, or at least `sas.wrapper.trace.values=false`
 (the default). With values hidden the trace still contains the SQL text and
 the arguments of metadata calls (schema/table name patterns), which is what
 makes it useful for diagnosis; treat the log file as sensitive and keep it
@@ -129,16 +161,17 @@ any transport security.
 
 * Case-sensitive `LIKE` matching for the `getSchemas` pattern, per the JDBC
   specification; names read back from the driver are returned as is.
-* **Not addressed in 0.2.0**: `getSearchStringEscape()` returns an empty string
-  with the SAS driver, whereas Starburst's JDBC base client requires a
-  non-empty escape string when it looks up a table or its columns by name
-  (`getTables` / `getColumns` with a schema or table name). Listing schemas
-  works with `noarg`; table and column discovery through Starburst may still
-  fail until the escape handling is addressed in a later version.
-  `Connection.getSchema()` is unsupported and `getIdentifierQuoteString()`
-  returns a space; these are not changed either.
+* The driver has no search-string escape: in metadata lookups by name
+  (`getTables`, `getColumns`) an underscore in a schema or table name acts as a
+  single-character wildcard, so a name like `LIB_A` can also match `LIBXA`.
 * Only JDBC types `VARCHAR` (12) and `DOUBLE` (8) have been observed in
-  `getColumns()` results.
+  `getColumns()` results: SAS dates and times appear as numbers (`DOUBLE`) or
+  strings (`VARCHAR`), not as JDBC date/time types.
+* Whether the IOM driver supports `PreparedStatement` `?` parameters (used by
+  Starburst to bind predicate constants) is unverified.
+* `Connection.getSchema()` is unsupported by the driver and is not changed.
+* `identifierQuoting=strip` does not know about SAS reserved words: a quoted
+  identifier that is a plain name is emitted bare.
 
 ## `tools/MetadataProbe.java`
 

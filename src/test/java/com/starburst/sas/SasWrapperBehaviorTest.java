@@ -224,6 +224,39 @@ class SasWrapperBehaviorTest {
         assertEquals(" ", md.getIdentifierQuoteString());
     }
 
+    // ---- escape is never changed ----
+
+    @Test
+    void searchStringEscapeIsReturnedUnchangedInEveryMode() throws Exception {
+        assertEquals("", noarg("").getSearchStringEscape());
+        assertEquals("", wrapped(SchemaSource.PASSTHROUGH, "", true, false).getSearchStringEscape());
+        assertEquals("\\", noarg("\\").getSearchStringEscape(), "a real driver value is passed through as well");
+    }
+
+    // ---- tolerance only for missing-column errors ----
+
+    @Test
+    void otherSqlExceptionsOnWhitelistedLabelsAreRethrown() throws Exception {
+        DatabaseMetaData md = noarg("");
+        try (ResultSet rs = md.getCatalogs()) {
+            SQLException e = assertThrows(SQLException.class, () -> rs.getString("TABLE_CAT"));
+            assertEquals("Stream closed", e.getMessage());
+            assertThrows(SQLException.class, () -> rs.getInt("SOURCE_DATA_TYPE"));
+        }
+    }
+
+    @Test
+    void missingColumnMessageIsMatchedCaseInsensitively() throws Exception {
+        try (ResultSet rs = noarg("").getTypeInfo()) {
+            assertNull(rs.getString("TABLE_CAT"));
+            assertTrue(rs.wasNull());
+        }
+        assertTrue(ResultSetInvocationHandler.isMissingColumn(new SQLException("No column of that name.")));
+        assertTrue(ResultSetInvocationHandler.isMissingColumn(new SQLException("no COLUMN")));
+        assertFalse(ResultSetInvocationHandler.isMissingColumn(new SQLException("Stream closed")));
+        assertFalse(ResultSetInvocationHandler.isMissingColumn(new SQLException((String) null)));
+    }
+
     // ---- configuration ----
 
     @Test

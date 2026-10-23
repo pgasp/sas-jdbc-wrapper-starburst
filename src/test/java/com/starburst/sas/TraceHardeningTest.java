@@ -192,6 +192,10 @@ class TraceHardeningTest {
             cfg.banner("x.Y");
             assertFalse(Files.exists(file), "no log file must be created when trace is off");
 
+            System.clearProperty("sas.wrapper.trace");
+            assertFalse(WrapperConfig.fromSystemProperties().traceEnabled, "trace is off by default");
+            assertFalse(Files.exists(file));
+
             System.setProperty("sas.wrapper.trace", "true");
             WrapperConfig on = WrapperConfig.fromSystemProperties();
             assertTrue(on.traceEnabled);

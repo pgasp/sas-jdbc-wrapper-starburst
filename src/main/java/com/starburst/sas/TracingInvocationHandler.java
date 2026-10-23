@@ -41,6 +41,7 @@ class TracingInvocationHandler implements InvocationHandler {
                     return "Traced" + target.getClass().getSimpleName() + "(#" + System.identityHashCode(proxy) + ")";
             }
         }
+        args = rewriteSql(method, args);
         StringBuilder note = new StringBuilder();
         Object result = null;
         Throwable error = null;
@@ -57,6 +58,30 @@ class TracingInvocationHandler implements InvocationHandler {
                         error == null ? null : Redaction.describeError(error), note.toString());
             }
         }
+    }
+
+    private static final java.util.Set<String> SQL_METHODS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "prepareStatement", "prepareCall", "nativeSQL",
+            "execute", "executeQuery", "executeUpdate", "executeLargeUpdate", "addBatch"));
+
+    /**
+     * With identifierQuoting=strip, the SQL text given to Connection.prepareStatement/prepareCall/nativeSQL
+     * and Statement.execute/executeQuery/executeUpdate/addBatch is rewritten for SAS SQL. The rewritten text is
+     * what is passed to the driver and what the trace shows.
+     */
+    private Object[] rewriteSql(Method method, Object[] args) {
+        if (config.identifierQuoting != WrapperConfig.IdentifierQuoting.STRIP
+                || args == null || args.length == 0 || !(args[0] instanceof String)
+                || !SQL_METHODS.contains(method.getName())) {
+            return args;
+        }
+        Class<?> c = method.getDeclaringClass();
+        if (c != Connection.class && !java.sql.Statement.class.isAssignableFrom(c)) {
+            return args;
+        }
+        Object[] copy = args.clone();
+        copy[0] = SqlIdentifierRewriter.rewrite((String) args[0]);
+        return copy;
     }
 
     /** The real invocation on the target. Overridable. */

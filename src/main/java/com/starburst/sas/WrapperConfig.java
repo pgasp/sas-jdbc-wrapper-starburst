@@ -48,14 +48,39 @@ final class WrapperConfig {
         }
     }
 
+    enum IdentifierQuoting {
+        /** Default: SQL is passed to the driver unchanged. */
+        PASSTHROUGH,
+        /** Double-quoted identifiers are rewritten for SAS SQL, see {@link SqlIdentifierRewriter}. */
+        STRIP;
+
+        static IdentifierQuoting parse(String value) {
+            if (value == null || value.trim().isEmpty() || "passthrough".equalsIgnoreCase(value.trim())) {
+                return PASSTHROUGH;
+            }
+            if ("strip".equalsIgnoreCase(value.trim())) {
+                return STRIP;
+            }
+            // Fail closed, like schemaSource.
+            throw new IllegalArgumentException("Unsupported sas.wrapper.identifierQuoting value; expected 'passthrough' or 'strip'");
+        }
+    }
+
     final SchemaSource schemaSource;
+    final IdentifierQuoting identifierQuoting;
     final boolean traceEnabled;
     final boolean traceValues;
     private final Consumer<String> sink;
     private final AtomicLong seq = new AtomicLong();
 
     WrapperConfig(SchemaSource schemaSource, boolean traceEnabled, boolean traceValues, Consumer<String> sink) {
+        this(schemaSource, IdentifierQuoting.PASSTHROUGH, traceEnabled, traceValues, sink);
+    }
+
+    WrapperConfig(SchemaSource schemaSource, IdentifierQuoting identifierQuoting, boolean traceEnabled,
+            boolean traceValues, Consumer<String> sink) {
         this.schemaSource = schemaSource;
+        this.identifierQuoting = identifierQuoting;
         this.traceEnabled = traceEnabled && sink != null;
         this.traceValues = traceValues;
         this.sink = sink;
@@ -63,7 +88,8 @@ final class WrapperConfig {
 
     static WrapperConfig fromSystemProperties() {
         SchemaSource source = SchemaSource.parse(System.getProperty("sas.wrapper.schemaSource", "passthrough"));
-        boolean trace = Boolean.parseBoolean(System.getProperty("sas.wrapper.trace", "true"));
+        IdentifierQuoting quoting = IdentifierQuoting.parse(System.getProperty("sas.wrapper.identifierQuoting", "passthrough"));
+        boolean trace = Boolean.parseBoolean(System.getProperty("sas.wrapper.trace", "false"));
         boolean values = Boolean.parseBoolean(System.getProperty("sas.wrapper.trace.values", "false"));
         Consumer<String> sink = null;
         if (trace) {
@@ -72,7 +98,7 @@ final class WrapperConfig {
             PrintStream out = openLog(System.getProperty("sas.wrapper.logFile", defaultLogPath));
             sink = out::println;
         }
-        return new WrapperConfig(source, trace, values, sink);
+        return new WrapperConfig(source, quoting, trace, values, sink);
     }
 
     private static PrintStream openLog(String logPath) {
@@ -97,7 +123,8 @@ final class WrapperConfig {
         if (traceEnabled) {
             sink.accept("=== SasJdbcWrapperDriver loaded, delegate=" + delegateClass
                     + ", trace=true, trace.values=" + traceValues
-                    + ", schemaSource=" + schemaSource.name().toLowerCase(Locale.ROOT) + " ===");
+                    + ", schemaSource=" + schemaSource.name().toLowerCase(Locale.ROOT)
+                    + ", identifierQuoting=" + identifierQuoting.name().toLowerCase(Locale.ROOT) + " ===");
         }
     }
 

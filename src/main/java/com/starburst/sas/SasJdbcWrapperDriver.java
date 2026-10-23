@@ -24,7 +24,8 @@ import java.util.Properties;
  * <pre>
  *   -Dsas.wrapper.delegateClass=com.sas.rio.MVADriver   real driver class to wrap
  *   -Dsas.wrapper.schemaSource=passthrough|noarg        default passthrough (no behavior change)
- *   -Dsas.wrapper.trace=true|false                      call logging; default true. false = no logging at all
+ *   -Dsas.wrapper.identifierQuoting=passthrough|strip   default passthrough; strip rewrites "X" identifiers in SQL for SAS
+ *   -Dsas.wrapper.trace=true|false                      call logging; default false. false = no logging at all
  *   -Dsas.wrapper.trace.values=true|false               default false: ResultSet values and bound parameters are logged as &lt;value&gt;
  *   -Dsas.wrapper.logFile=...                           default: &lt;tmpdir&gt;/sas-jdbc-wrapper.log
  * </pre>
