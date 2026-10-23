@@ -6,24 +6,34 @@
 
   <groupId>com.starburst.sas</groupId>
   <artifactId>sas-jdbc-wrapper</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <packaging>jar</packaging>
 
   <name>sas-jdbc-wrapper</name>
   <description>
     JDBC driver wrapper for SAS (IOM / SAS 9.4 Integration Technologies JDBC
     driver) used with Starburst's Generic JDBC connector. Starts as a
-    transparent call tracer (every JDBC call logged, delegate untouched) to
-    diagnose schema/catalog discovery issues, with an extension point to
-    grow into a behavioral wrapper (e.g. remapping getSchemas()/getCatalogs())
-    once a specific fix is validated against a real SAS IOM environment.
+    call tracer (secrets and hosts redacted) that also works around the
+    JDBC non-conformities of the SAS driver which make schema discovery fail
+    through generic JDBC clients (getSchemas(catalog, pattern) returning no
+    rows, optional metadata columns missing). The workaround is opt-in
+    (-Dsas.wrapper.schemaSource=noarg).
   </description>
 
   <properties>
-    <maven.compiler.source>11</maven.compiler.source>
-    <maven.compiler.target>11</maven.compiler.target>
+    <maven.compiler.release>11</maven.compiler.release>
+    <junit.version>5.10.2</junit.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
 
   <build>
     <finalName>${project.artifactId}-${project.version}</finalName>
@@ -32,6 +42,11 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.4.1</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
       </plugin>
     </plugins>
   </build>
