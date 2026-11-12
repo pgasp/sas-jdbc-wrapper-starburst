@@ -6,7 +6,7 @@
 
   <groupId>com.starburst.sas</groupId>
   <artifactId>sas-jdbc-wrapper</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <packaging>jar</packaging>
 
   <name>sas-jdbc-wrapper</name>
@@ -17,12 +17,21 @@
     JDBC non-conformities of the SAS driver which make schema discovery fail
     through generic JDBC clients (getSchemas(catalog, pattern) returning no
     rows, optional metadata columns missing). The workaround is opt-in
-    (-Dsas.wrapper.schemaSource=noarg).
+    (-Dsas.wrapper.schemaSource=noarg). Every delegated call runs with the thread
+    context class loader set to the wrapper's own loader (CORBA ORB lookups of the
+    SAS driver on Trino worker threads). Logging through java.util.logging
+    (logger com.starburst.sas). Best effort, unsupported.
   </description>
 
   <properties>
     <maven.compiler.release>11</maven.compiler.release>
     <junit.version>5.10.2</junit.version>
+    <!-- Versions of the glassfish-corba jars delivered next to the SAS driver at the reference deployment.
+         Only used by the class loader reproduction tests (copied to target/corba-libs, NOT on the test classpath). -->
+    <corba.version>4.2.4</corba.version>
+    <pfl-basic.version>5.0.0</pfl-basic.version>
+    <pfl-tf.version>4.0.1</pfl-tf.version>
+    <management-api.version>3.3.0</management-api.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
@@ -42,11 +51,50 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.4.1</version>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Implementation-Title>${project.artifactId}</Implementation-Title>
+              <Implementation-Version>${project.version}</Implementation-Version>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.6.1</version>
+        <executions>
+          <execution>
+            <id>copy-corba-libs-for-tests</id>
+            <phase>generate-test-resources</phase>
+            <goals>
+              <goal>copy</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/corba-libs</outputDirectory>
+              <artifactItems>
+                <artifactItem><groupId>org.glassfish.corba</groupId><artifactId>glassfish-corba-orb</artifactId><version>${corba.version}</version></artifactItem>
+                <artifactItem><groupId>org.glassfish.corba</groupId><artifactId>glassfish-corba-omgapi</artifactId><version>${corba.version}</version></artifactItem>
+                <artifactItem><groupId>org.glassfish.corba</groupId><artifactId>glassfish-corba-internal-api</artifactId><version>${corba.version}</version></artifactItem>
+                <artifactItem><groupId>org.glassfish.corba</groupId><artifactId>glassfish-corba-csiv2-idl</artifactId><version>${corba.version}</version></artifactItem>
+                <artifactItem><groupId>org.glassfish.pfl</groupId><artifactId>pfl-basic</artifactId><version>${pfl-basic.version}</version></artifactItem>
+                <artifactItem><groupId>org.glassfish.pfl</groupId><artifactId>pfl-tf</artifactId><version>${pfl-tf.version}</version></artifactItem>
+                <artifactItem><groupId>org.glassfish.external</groupId><artifactId>management-api</artifactId><version>${management-api.version}</version></artifactItem>
+              </artifactItems>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
+        <configuration>
+          <systemPropertyVariables>
+            <sas.test.corbaLibs>${project.build.directory}/corba-libs</sas.test.corbaLibs>
+          </systemPropertyVariables>
+        </configuration>
       </plugin>
     </plugins>
   </build>

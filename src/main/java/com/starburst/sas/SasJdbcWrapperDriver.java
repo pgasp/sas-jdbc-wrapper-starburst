@@ -25,10 +25,14 @@ import java.util.Properties;
  *   -Dsas.wrapper.delegateClass=com.sas.rio.MVADriver   real driver class to wrap
  *   -Dsas.wrapper.schemaSource=passthrough|noarg        default passthrough (no behavior change)
  *   -Dsas.wrapper.identifierQuoting=passthrough|strip   default passthrough; strip rewrites "X" identifiers in SQL for SAS
- *   -Dsas.wrapper.trace=true|false                      call logging; default false. false = no logging at all
+ *   -Dsas.wrapper.trace=true|false                      call logging (INFO + log file); default false. false = no per-call logging
  *   -Dsas.wrapper.trace.values=true|false               default false: ResultSet values and bound parameters are logged as &lt;value&gt;
- *   -Dsas.wrapper.logFile=...                           default: &lt;tmpdir&gt;/sas-jdbc-wrapper.log
+ *   -Dsas.wrapper.logFile=...|none                      only with trace=true; default: &lt;tmpdir&gt;/sas-jdbc-wrapper.log; none = no file
  * </pre>
+ * Logging goes through {@code java.util.logging}, logger {@code com.starburst.sas}: without the system property,
+ * per-call trace lines are produced when that logger is enabled at FINE (DEBUG in SEP's {@code log.properties}).
+ * Every call delegated to the real driver runs with the thread context class loader set to the loader of this
+ * wrapper, see {@link ContextClassLoaders}.
  * JDBC URLs are always logged as {@code jdbc:sasiom://<redacted>} and
  * {@code Properties} (credentials) are never logged.
  */
@@ -40,13 +44,36 @@ public class SasJdbcWrapperDriver implements Driver {
         try {
             WrapperConfig config = WrapperConfig.fromSystemProperties();
             String delegateClass = System.getProperty("sas.wrapper.delegateClass", "com.sas.rio.MVADriver");
-            Driver delegate = (Driver) Class.forName(delegateClass).getDeclaredConstructor().newInstance();
+            // The delegate's static initializer may already touch the ORB: same TCCL rule as for every other call.
+            Driver delegate = ContextClassLoaders.withOwnLoader(
+                    () -> newDelegate(delegateClass));
             core = new DriverCore(delegate, config);
-            config.banner(delegateClass);
+            if (config.traceEnabled()) {
+                config.banner(delegateClass);
+            } else {
+                WrapperConfig.LOG.info("SasJdbcWrapperDriver " + version() + " loaded, delegate=" + delegateClass
+                        + ", schemaSource=" + config.schemaSource.name().toLowerCase(java.util.Locale.ROOT)
+                        + ", identifierQuoting=" + config.identifierQuoting.name().toLowerCase(java.util.Locale.ROOT)
+                        + ", tracing off (enable with sas.wrapper.trace=true or logger "
+                        + WrapperConfig.LOGGER_NAME + " at DEBUG)");
+            }
             DriverManager.registerDriver(new SasJdbcWrapperDriver());
         } catch (Exception e) {
             throw new ExceptionInInitializerError(e);
         }
+    }
+
+    private static Driver newDelegate(String delegateClass) throws SQLException {
+        try {
+            return (Driver) Class.forName(delegateClass).getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
+            throw new SQLException("Cannot load delegate driver " + delegateClass + ": " + e, e);
+        }
+    }
+
+    private static String version() {
+        String v = SasJdbcWrapperDriver.class.getPackage().getImplementationVersion();
+        return v == null ? "(unknown version)" : v;
     }
 
     // JDBC spec requires a public no-arg constructor for driver registration.

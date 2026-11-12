@@ -11,7 +11,10 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Immutable runtime configuration of the wrapper plus the trace sink.
@@ -19,8 +22,21 @@ import java.util.function.Consumer;
  * Kept separate from the Driver class so that the proxy machinery can be
  * unit-tested without loading a real SAS driver or touching system
  * properties.
+ *
+ * <p>Trace lines are emitted through {@code java.util.logging}, logger
+ * {@link #LOGGER_NAME} (so that they can be routed into the server log of the
+ * host application, e.g. {@code com.starburst.sas=DEBUG} in SEP's
+ * {@code log.properties}). Tracing is active when either the legacy system
+ * property {@code sas.wrapper.trace=true} is set (lines are then logged at
+ * INFO and also written to the legacy log file) or the logger is enabled at
+ * FINE (DEBUG) level. Otherwise no trace line is produced.
  */
 final class WrapperConfig {
+
+    static final String LOGGER_NAME = "com.starburst.sas";
+
+    /** Strong reference: keeps the logger (and the level configured on it) alive. */
+    static final Logger LOG = Logger.getLogger(LOGGER_NAME);
 
     enum SchemaSource {
         /** Default: no behavior change, the real driver is only traced. */
@@ -68,22 +84,34 @@ final class WrapperConfig {
 
     final SchemaSource schemaSource;
     final IdentifierQuoting identifierQuoting;
-    final boolean traceEnabled;
     final boolean traceValues;
+    private final BooleanSupplier traceEnabled;
     private final Consumer<String> sink;
     private final AtomicLong seq = new AtomicLong();
 
+    /** Fixed trace switch with an explicit sink (tests). */
     WrapperConfig(SchemaSource schemaSource, boolean traceEnabled, boolean traceValues, Consumer<String> sink) {
         this(schemaSource, IdentifierQuoting.PASSTHROUGH, traceEnabled, traceValues, sink);
     }
 
     WrapperConfig(SchemaSource schemaSource, IdentifierQuoting identifierQuoting, boolean traceEnabled,
             boolean traceValues, Consumer<String> sink) {
+        this(schemaSource, identifierQuoting, traceValues, sink,
+                traceEnabled && sink != null ? () -> true : () -> false);
+    }
+
+    private WrapperConfig(SchemaSource schemaSource, IdentifierQuoting identifierQuoting, boolean traceValues,
+            Consumer<String> sink, BooleanSupplier traceEnabled) {
         this.schemaSource = schemaSource;
         this.identifierQuoting = identifierQuoting;
-        this.traceEnabled = traceEnabled && sink != null;
         this.traceValues = traceValues;
         this.sink = sink;
+        this.traceEnabled = traceEnabled;
+    }
+
+    /** True when trace lines are currently produced (legacy property, or logger enabled at FINE/DEBUG). */
+    boolean traceEnabled() {
+        return traceEnabled.getAsBoolean();
     }
 
     static WrapperConfig fromSystemProperties() {
@@ -91,14 +119,26 @@ final class WrapperConfig {
         IdentifierQuoting quoting = IdentifierQuoting.parse(System.getProperty("sas.wrapper.identifierQuoting", "passthrough"));
         boolean trace = Boolean.parseBoolean(System.getProperty("sas.wrapper.trace", "false"));
         boolean values = Boolean.parseBoolean(System.getProperty("sas.wrapper.trace.values", "false"));
-        Consumer<String> sink = null;
+        // Legacy switch (sas.wrapper.trace=true): lines at INFO + the legacy log file. Without it, trace lines are
+        // logged at FINE and only appear when the logger is enabled at DEBUG (log.properties). Zero logging otherwise.
+        Consumer<String> file = null;
         if (trace) {
-            // Trace off means zero logging: the log file is not even created.
-            String defaultLogPath = System.getProperty("java.io.tmpdir") + java.io.File.separator + "sas-jdbc-wrapper.log";
-            PrintStream out = openLog(System.getProperty("sas.wrapper.logFile", defaultLogPath));
-            sink = out::println;
+            String configured = System.getProperty("sas.wrapper.logFile");
+            if (!"none".equalsIgnoreCase(configured == null ? null : configured.trim())) {
+                String defaultLogPath = System.getProperty("java.io.tmpdir") + java.io.File.separator + "sas-jdbc-wrapper.log";
+                PrintStream out = openLog(configured == null ? defaultLogPath : configured);
+                file = out::println;
+            }
         }
-        return new WrapperConfig(source, quoting, trace, values, sink);
+        Consumer<String> fileSink = file;
+        Level level = trace ? Level.INFO : Level.FINE;
+        Consumer<String> sink = line -> {
+            LOG.log(level, line);
+            if (fileSink != null) {
+                fileSink.accept(line);
+            }
+        };
+        return new WrapperConfig(source, quoting, values, sink, () -> trace || LOG.isLoggable(Level.FINE));
     }
 
     private static PrintStream openLog(String logPath) {
@@ -120,7 +160,7 @@ final class WrapperConfig {
     }
 
     void banner(String delegateClass) {
-        if (traceEnabled) {
+        if (traceEnabled()) {
             sink.accept("=== SasJdbcWrapperDriver loaded, delegate=" + delegateClass
                     + ", trace=true, trace.values=" + traceValues
                     + ", schemaSource=" + schemaSource.name().toLowerCase(Locale.ROOT)
@@ -130,7 +170,7 @@ final class WrapperConfig {
 
     /** Writes one trace line. No-op when trace is disabled. All parameters are already redacted text ({@code error} is null when the call succeeded). */
     void logCall(String label, String args, String result, String error, String note) {
-        if (!traceEnabled) {
+        if (!traceEnabled()) {
             return;
         }
         StringBuilder sb = new StringBuilder();

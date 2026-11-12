@@ -18,23 +18,32 @@ final class DriverCore {
     }
 
     boolean acceptsURL(String url) throws SQLException {
-        return delegate.acceptsURL(url);
+        return ContextClassLoaders.withOwnLoader(() -> delegate.acceptsURL(url));
     }
 
     Connection connect(String url, Properties info) throws SQLException {
         Connection wrapped = null;
         Throwable error = null;
+        String note = null;
         try {
-            wrapped = JdbcProxies.wrapConnection(delegate.connect(url, info), config);
+            if (config.traceEnabled()) {
+                // Diagnosis of class loading problems (ORB lookups go through the TCCL, see ContextClassLoaders).
+                note = "tccl=" + ContextClassLoaders.describe(Thread.currentThread().getContextClassLoader())
+                        + ", wrapperLoader=" + ContextClassLoaders.describe(ContextClassLoaders.OWN)
+                        + ", delegateLoader=" + ContextClassLoaders.describe(delegate.getClass().getClassLoader())
+                        + ", tcclDuringCall=" + ContextClassLoaders.describe(ContextClassLoaders.OWN);
+            }
+            wrapped = JdbcProxies.wrapConnection(
+                    ContextClassLoaders.withOwnLoader(() -> delegate.connect(url, info)), config);
             return wrapped;
         } catch (SQLException | RuntimeException e) {
             error = e;
             throw e;
         } finally {
-            if (config.traceEnabled) {
+            if (config.traceEnabled()) {
                 // Never log the Properties (credentials) nor host/port of the URL, even in error messages.
                 config.logCall("Driver.connect", Redaction.redactUrl(url), Redaction.format(wrapped),
-                        error == null ? null : Redaction.describeError(error, Redaction.sensitiveTokens(url)), null);
+                        error == null ? null : Redaction.describeError(error, Redaction.sensitiveTokens(url)), note);
             }
         }
     }
@@ -48,7 +57,7 @@ final class DriverCore {
     }
 
     DriverPropertyInfo[] getPropertyInfo(String url, Properties info) throws SQLException {
-        return delegate.getPropertyInfo(url, info);
+        return ContextClassLoaders.withOwnLoader(() -> delegate.getPropertyInfo(url, info));
     }
 
     boolean jdbcCompliant() {

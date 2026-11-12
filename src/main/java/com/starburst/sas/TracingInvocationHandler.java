@@ -46,13 +46,13 @@ class TracingInvocationHandler implements InvocationHandler {
         Object result = null;
         Throwable error = null;
         try {
-            result = wrapResult(method, call(method, args, note));
+            result = wrapResult(method, callWithOwnLoader(method, args, note));
             return result;
         } catch (Throwable t) {
             error = t;
             throw t;
         } finally {
-            if (config.traceEnabled) {
+            if (config.traceEnabled()) {
                 config.logCall(target.getClass().getSimpleName() + "." + method.getName(),
                         formatArgs(method, args), formatResult(method, args, result),
                         error == null ? null : Redaction.describeError(error), note.toString());
@@ -82,6 +82,24 @@ class TracingInvocationHandler implements InvocationHandler {
         Object[] copy = args.clone();
         copy[0] = SqlIdentifierRewriter.rewrite((String) args[0]);
         return copy;
+    }
+
+    /**
+     * Every delegated call runs with the TCCL set to the wrapper's class loader (see {@link ContextClassLoaders}),
+     * restored in {@code finally}. Written out by hand (no lambda) because this is the per-call hot path.
+     */
+    private Object callWithOwnLoader(Method method, Object[] args, StringBuilder note) throws Throwable {
+        Thread thread = Thread.currentThread();
+        ClassLoader previous = thread.getContextClassLoader();
+        if (previous == ContextClassLoaders.OWN) {
+            return call(method, args, note);
+        }
+        thread.setContextClassLoader(ContextClassLoaders.OWN);
+        try {
+            return call(method, args, note);
+        } finally {
+            thread.setContextClassLoader(previous);
+        }
     }
 
     /** The real invocation on the target. Overridable. */
